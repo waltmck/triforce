@@ -1,0 +1,99 @@
+@prefix doap:  <http://usefulinc.com/ns/doap#> .
+@prefix lv2:   <http://lv2plug.in/ns/lv2core#> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix units: <http://lv2plug.in/ns/extensions/units#> .
+@prefix epp: <http://lv2plug.in/ns/ext/port-props#> .
+
+<https://chadmed.au/triforce>
+    a lv2:Plugin ,
+        lv2:FilterPlugin ;
+
+    lv2:binary <triforce.so> ;
+
+    doap:name "Triforce" ;
+
+    lv2:requiredFeature lv2:inPlaceBroken ;
+    lv2:optionalFeature lv2:hardRTCapable ;
+
+    lv2:port [
+        a lv2:InputPort ,
+            lv2:AudioPort ;
+        lv2:index 0 ;
+        lv2:symbol "in_1" ;
+        lv2:name "In Vertex"
+    ] , [
+       a lv2:InputPort ,
+            lv2:AudioPort ;
+        lv2:index 1 ;
+        lv2:symbol "in_2" ;
+        lv2:name "In Left/Top"
+    ] , [
+       a lv2:InputPort ,
+            lv2:AudioPort ;
+        lv2:index 2 ;
+        lv2:symbol "in_3" ;
+        lv2:name "In Right/Bottom"
+    ], [
+        a lv2:OutputPort ,
+            lv2:AudioPort ;
+        lv2:index 3 ;
+        lv2:symbol "out" ;
+        lv2:name "Out"
+    ] , [
+        a lv2:InputPort ,
+            lv2:ControlPort ;
+        lv2:index 4 ;
+        lv2:symbol "angle" ;
+        lv2:name "Steering Angle" ;
+        lv2:portProperty epp:hasStrictBounds ;
+        lv2:default 0.0 ;
+        lv2:minimum 0.0 ;
+        lv2:maximum 360.0 ;
+        units:unit units:degrees ;
+        lv2:scalePoint [
+            rdfs:label "45" ;
+            rdf:value 45.0
+        ] , [
+            rdfs:label "90" ;
+            rdf:value 90
+        ] , [
+            rdfs:label "180" ;
+            rdf:value 180
+        ], [
+            rdfs:label "270" ;
+            rdf:value 270
+        ]
+    ] , [
+        a lv2:InputPort ,
+            lv2:ControlPort ;
+        lv2:index 5 ;
+        lv2:symbol "opt_freq" ;
+        lv2:name "Target Frequency" ;
+        lv2:portProperty epp:logarithmic ;
+        lv2:portProperty epp:hasStrictBounds
+        lv2:default 2000.0 ;
+        lv2:minimum 20.0 ;
+        lv2:maximum 20000.0 ;
+    ] , [
+        a lv2:InputPort ,
+            lv2:ControlPort ;
+        lv2:index 6 ;
+        lv2:symbol "t_win" ;
+        lv2:name "Time Window" ;
+        lv2:portProperty epp:hasStrictBounds ;
+        lv2:default 100 ;
+        lv2:minimum 100 ;
+        lv2:maximum 500 ;
+        units:unit units:ms ;
+        lv2:scalePoint [
+            rdfs:label "20" ;
+            rdf:value 20
+        ] , [
+            rdfs:label "100" ;
+            rdf:value 100
+        ] , [
+            rdfs:label "200" ;
+            rdf:value 200
+        ]
+    ] .

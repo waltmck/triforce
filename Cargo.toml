@@ -1,0 +1,25 @@
+[package]
+name = "triforce-lv2"
+authors = ["James Calligeros"]
+description = "Minimum variance distortionless response beamformer for a very specific mic array"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/chadmed/triforce"
+version = "0.1.0"
+edition = "2021"
+keywords = ["lv2", "beamforming", "audio", "plugin"]
+categories = ["multimedia::audio"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+[dependencies]
+biquad = "^0.4.2"
+lv2 = "^0.6.0"
+ndarray = "0.15"
+ndarray-linalg = { features = ["netlib-system"], path = "ndarray-linalg/ndarray-linalg" }
+
+[lib]
+crate-type = ["cdylib"]
+name = "triforce"
