@@ -12,8 +12,14 @@
 use std::f32::consts::PI;
 use std::time::SystemTime;
 
-use ndarray::*;
-use ndarray_linalg::Inverse;
+use nalgebra::{DMatrix,
+    DVector,
+    ComplexField,
+    Vector3,
+    linalg::SVD
+};
+
+use rustfft::{FftPlanner,num_complex::Complex,num_traits::Zero};
 
 use lv2::prelude::*;
 
@@ -22,48 +28,104 @@ const C: f32 = 343.00; /* m*s^-1 */
 // Let's just hard-code this for now
 const MIC_SPACING: f32 = 0.02; /* m */
 
-fn to_radians(degrees: f32) -> f32 {
-    degrees * (PI / 180f32)
+/// Perform a Hilbert transform on a slice of f32s to give us the analytic signal of
+/// our input sample buffer. This is necessary to extract phase information from the
+/// signal such that our beamformer actually works.
+fn analytic_signal(signal: &[f32]) -> Vec<Complex<f32>> {
+    let len: usize = signal.len();
+
+    // Convert each real sample into a complex sample
+    let mut complex_signal: Vec<Complex<f32>> = signal.iter()
+                                                      .map(|&x| Complex::new(x, 0.0))
+                                                      .collect();
+
+    // Set up the fft and inverse fft
+    let mut planner = FftPlanner::new();
+    let fft = planner.plan_fft_forward(len);
+    let ifft = planner.plan_fft_inverse(len);
+
+    // Mutate the output buffer into the forward FFT
+    fft.process(&mut complex_signal);
+
+    // Perform the Hilbert transform on the FFT. To do this, we multiply every
+    // positive sample under the Nyquist limit by 2+0j, and destroy every sample
+    // above it.
+    for i in 0..len {
+        if i > 0 && i < len / 2 {
+            complex_signal[i] *= Complex::new(2.0, 0.0);
+        } else if i >= len / 2 {
+            complex_signal[i] = Complex::zero();
+        }
+    }
+
+    // Turn the original complex buffer into the inferse FFT and then normalise
+    ifft.process(&mut complex_signal);
+    complex_signal.iter_mut()
+                  .for_each(|x| *x /= len as f32);
+
+    complex_signal
 }
 
-/*
- * The steering vector
- */
-fn build_steering_vector(angle: f32, opt_freq: f32) -> Array1<f32> {
-
+fn steering_vec(theta: f32, phi: f32, f: f32) -> DVector<Complex<f32>> {
     // Mic positions are relative to Left/Top to preserve x/y axis semantics
-    let mic_positions: Array1<Array1<f32>> = ndarray::array![
-        ndarray::array![0f32, 0f32],
-        ndarray::array![MIC_SPACING, 0f32],
-        ndarray::array![MIC_SPACING / 2f32, 3f32.sqrt() / (MIC_SPACING / 2f32)]
+    let mic_positions: Vec<Vector3<f32>> = vec![
+        Vector3::new(0f32, 0f32, 0f32),
+        Vector3::new(MIC_SPACING, 0f32, 0f32),
+        Vector3::new(MIC_SPACING / 2f32, 3f32.sqrt() / (MIC_SPACING / 2f32), 0f32)
     ];
 
-    // Derive the unit vector of the steering angle
-    let unit_vector: Array1<f32> = ndarray::array![angle.cos(), angle.sin()];
+    // Calculate the wavenumber
+    let wavenumber = 2f32 * PI * (f / C);
 
-    // Collect up the steering vector
-    Array1::from_shape_vec(3,
-        mic_positions.iter()
-        .map(|mic| mic.dot(&unit_vector))
-        .map(|delay| 2f32 * PI * opt_freq * (delay / C))
-        .collect()).unwrap()
+    // Compute the unit vector of the DOA
+    let u_dir = Vector3::new(
+        phi.sin() * theta.cos(),
+        phi.sin() * theta.sin(),
+        phi.cos(),
+    );
+
+    // Calculate the steering vector
+    let mut steering_vector = DVector::from_element(mic_positions.len(), Complex::new(0f32, 0f32));
+
+    for (i, mic_pos) in mic_positions.iter().enumerate() {
+        let delay = mic_pos.dot(&u_dir) / C;
+        let phase = -wavenumber * delay;
+        steering_vector[i] = Complex::new(phase.cos(), phase.sin());
+    }
+
+    steering_vector
 }
 
-fn create_sample_array(inputs: &[&[f32]], num_samples: usize) -> Array2<f32> {
-    let flat_array: Vec<f32> = inputs.iter()
-                                     .flat_map(|&slice| slice.iter().copied())
-                                     .collect();
+fn covariance(signals: &Vec<Vec<Complex<f32>>>) -> DMatrix<Complex<f32>> {
+    let n_mics = signals.len();
+    let n_samples = signals[0].len();
 
-    Array2::from_shape_vec((3, num_samples), flat_array)
-        .expect("Could not create array from sample vector!")
-}
+    let mut covar = DMatrix::zeros(n_mics, n_mics);
 
-fn build_covariance_matrix(signals: ArrayView2<f32>, num_samples: usize) -> Array2<f32> {
-    let transposed = signals.t();
-
-    let covar = signals.dot(&transposed) / num_samples as f32;
-
+    for t in 0..n_samples {
+        let discrete: DVector<Complex<f32>> = DVector::from_iterator(
+            n_mics,
+            signals.iter().map(|s| s[t]),
+        );
+        covar += &discrete * discrete.adjoint();
+    }
+    covar /= Complex::new(n_samples as f32, 0f32);
     covar
+}
+
+/// To calculate the weighting vector for the beamformer, we need to invert
+/// the covariance matrix, multiply it by the steering vector, then divide that
+/// by itself multiplied by the Hermitian transpose of the steering vector
+/// w = (cov^-1 * sv) / (sv.adjoint() * (cov^-1 * sv))
+fn mvdr_weights(cov: DMatrix<Complex<f32>>, sv: DVector<Complex<f32>>) -> DVector<Complex<f32>> {
+    // The covariance matrix is always square
+    let svd = SVD::new(cov, true, true);
+    let r_inv = svd.pseudo_inverse(1e-6).unwrap();
+
+    let num = r_inv * &sv;
+    let den = sv.dot(&num);
+
+    num / den
 }
 
 /*
@@ -75,7 +137,8 @@ fn build_covariance_matrix(signals: ArrayView2<f32>, num_samples: usize) -> Arra
  *      in_2: channel 2 input (left/top)
  *      in_3: channel 3 input (right/bottom)
  *      out: output
- *      angle: steering angle in degrees
+ *      h_angle: horizontal steering angle in degrees
+ *      v_angle: vertical steering angle in degrees
  *      opt_freq: frequency to optimise for
  *      t_win: covariance matrix time window
  */
@@ -85,7 +148,8 @@ struct Ports {
     in_2: InputPort<Audio>,
     in_3: InputPort<Audio>,
     out: OutputPort<Audio>,
-    angle: InputPort<Control>,
+    h_angle: InputPort<Control>,
+    v_angle: InputPort<Control>,
     opt_freq: InputPort<Control>,
     t_win: InputPort<Control>
 }
@@ -95,11 +159,12 @@ struct Ports {
  */
 #[uri("https://chadmed.au/triforce")]
 struct Triforce {
-    angle_curr: f32,
-    last_update: SystemTime,
+    hangle_curr: f32,
+    vangle_curr: f32,
     freq_curr: f32,
-    steering_vector: Array1<f32>,
-    covar: Array2<f32>,
+    last_update: SystemTime,
+    steering_vector: DVector<Complex::<f32>>,
+    covar: DMatrix<Complex::<f32>>,
 }
 
 /*
@@ -118,65 +183,86 @@ impl Plugin for Triforce {
 
     fn new(_info: &PluginInfo, _features: &mut ()) -> Option<Self> {
         Some(Self {
-            angle_curr: 0f32,
-            last_update: SystemTime::now(),
+            hangle_curr: 0f32,
+            vangle_curr: 0f32,
             freq_curr: 1000f32,
-            steering_vector: build_steering_vector(to_radians(90f32), 1000f32),
-            covar: ndarray::array!([], []),
+            last_update: SystemTime::now(),
+            steering_vector: steering_vec(90f32.to_radians(),
+                                             45f32.to_radians(),
+                                             1000f32),
+            covar: DMatrix::zeros(3, 3),
         })
     }
 
     fn run(&mut self, ports: &mut Ports, _features: &mut (), _: u32) {
         Beamformer::update_params(self, ports);
 
+        // Generate analytic signal for each sample
+        let a1 = analytic_signal(*ports.in_1);
+        let a2 = analytic_signal(*ports.in_2);
+        let a3 = analytic_signal(*ports.in_3);
+
         // Steering vector is relative to Left/Top mic
         let inputs = vec![
-            *ports.in_2,
-            *ports.in_1,
-            *ports.in_3
+            a2,
+            a1,
+            a3
         ];
         let num_samples = inputs[0].len();
         if num_samples <= 0 {
             return;
         }
 
-        let samples = create_sample_array(&inputs, num_samples);
-
         // Do some time handling to determine if we need to update the covariance
         // matrix
         if self.last_update.elapsed().unwrap().as_millis() > *ports.t_win as u128 {
-            self.covar = build_covariance_matrix(samples.view(), num_samples);
+            self.covar = covariance(&inputs);
         }
 
-        // We need to get the inverse of the covariance matrix, then get the dot product
-        // of that and the steering vector. The covariance matrix is always square.
-        let rv = self.covar
-            .inv()
-            .expect("Could not invert covariance matrix")
-            .dot(&self.steering_vector);
+        // Get the MVDR weights
+        let w = mvdr_weights(self.covar.clone(), self.steering_vector.clone());
 
-        let norm = self.steering_vector.dot(&rv);
+        // Now we can finally do the beamforming
+        let mut out = vec![Complex::zero(); num_samples];
 
-        let weights = rv / norm;
+        for t in 0..num_samples {
+            let discrete: DVector<Complex<f32>> = DVector::from_iterator(
+                3, // number of mics
+                inputs.iter().map(|s| s[t]),
+            );
 
-        let output = samples.t().dot(&weights);
+            if discrete.is_empty() { continue; }
 
-        // Now make sure our output will fit in our LV2 buffer
-        assert_eq!(output.len(), ports.out.len());
+            out[t] = w.dot(&discrete);
+        }
 
-        for (i, &sample) in output.iter().enumerate() {
-            ports.out[i] = sample;
+        // Now we need to revert the Hilbert transform and output the signal
+        let re: Vec<f32> = out.iter().map(|z| z.re).collect();
+        if re.len() != ports.out.len() {
+            println!("Buffers differ in length! In: {}, Out: {}", re.len(), ports.out.len());
+        }
+
+        for (real, output) in Iterator::zip(re.iter(), ports.out.iter_mut()) {
+            if real.is_finite() && !real.is_nan() {
+                *output = real.clamp(-10f32, 10f32);
+            } else {
+                *output = 0f32;
+            }
         }
     }
 }
 
 impl Beamformer for Triforce {
     fn update_params(&mut self, ports: &mut Ports) {
-        if self.angle_curr != *ports.angle ||
-            self.freq_curr != *ports.opt_freq {
-            self.angle_curr = *ports.angle;
+        if self.hangle_curr != *ports.h_angle ||
+            self.freq_curr != *ports.opt_freq ||
+            self.vangle_curr != *ports.v_angle {
+            self.hangle_curr = *ports.h_angle;
+            self.vangle_curr = *ports.v_angle;
             self.freq_curr = *ports.opt_freq;
-            self.steering_vector = build_steering_vector(to_radians(self.angle_curr), self.freq_curr);
+            self.steering_vector = steering_vec(self.hangle_curr.to_radians(),
+                                                self.vangle_curr.to_radians(),
+                                                self.freq_curr);
         }
     }
 }

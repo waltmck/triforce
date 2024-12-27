@@ -15,10 +15,10 @@ opt-level = 3
 lto = "thin"
 
 [dependencies]
-biquad = "^0.4.2"
-lv2 = "^0.6.0"
-ndarray = "0.15"
-ndarray-linalg = { features = ["netlib-system"], path = "ndarray-linalg/ndarray-linalg" }
+biquad = "0.4.2"
+lv2 = "0.6.0"
+nalgebra = "0.33.2"
+rustfft = "6.2.0"
 
 [lib]
 crate-type = ["cdylib"]
