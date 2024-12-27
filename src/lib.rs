@@ -236,6 +236,7 @@ impl Plugin for Triforce {
             self.covar_window[1].extend_from_slice(&inputs[1][0..767]);
             self.covar_window[2].extend_from_slice(&inputs[2][0..767]);
             self.covar = covariance(&self.covar_window);
+            self.last_update = SystemTime::now();
             self.covar_window[0] = inputs[0][768..1023].to_vec();
             self.covar_window[1] = inputs[1][768..1023].to_vec();
             self.covar_window[2] = inputs[2][768..1023].to_vec();
