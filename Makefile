@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Copyright (C) 2024 James Calligeros <jcalligeros99@gmail.com>
 
-LIBDIR ?= /usr/lib64
+PREFIX ?= /usr/local
+LIBDIR ?= $(PREFIX)/lib64
 
 default:
 	cargo build --release
