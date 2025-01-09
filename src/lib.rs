@@ -135,13 +135,13 @@ fn covariance(signals: &Vec<Vec<Complex<f32>>>) -> DMatrix<Complex<f32>> {
 /// w = (cov^-1 * sv) / (sv.adjoint() * (cov^-1 * sv)). Note that the denominator
 /// is the same as the conjugate-linear dot product of the steering vector and
 /// the numerator.
-fn mvdr_weights(cov: DMatrix<Complex<f32>>, sv: DVector<Complex<f32>>) -> DVector<Complex<f32>> {
+fn mvdr_weights(cov: &DMatrix<Complex<f32>>, sv: &DVector<Complex<f32>>) -> DVector<Complex<f32>> {
     // Since we have a numerically unstable covariance matrix, we can't take the
     // true inverse of it. Let's instead decompose it and take the pseudoinverse.
-    let svd = SVD::new(cov, true, true);
+    let svd = SVD::new(cov.to_owned(), true, true);
     let r_inv = svd.pseudo_inverse(1e-4f32).unwrap();
 
-    let num = r_inv * &sv;
+    let num = r_inv * sv;
     let den = sv.dotc(&num); // Conjugate-linear dot product
 
     num / den
@@ -243,7 +243,7 @@ impl Plugin for Triforce {
         }
 
         // Get the MVDR weights
-        let w = mvdr_weights(self.covar.to_owned(), self.steering_vector.to_owned());
+        let w = mvdr_weights(&self.covar, &self.steering_vector);
 
         // Now we can finally do the beamforming
         let mut out = vec![Complex::zero(); num_samples];
