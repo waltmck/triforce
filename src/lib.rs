@@ -152,11 +152,11 @@ fn mvdr_weights(cov: &DMatrix<Complex<f32>>, sv: &DVector<Complex<f32>>) -> DVec
  *
  *
  * Ports:
- *      in_1: channel 1 input (vertex of triangle)
- *      in_2: channel 2 input (left/top)
- *      in_3: channel 3 input (right/bottom)
+ *      in_1: channel 1 input (left/top)
+ *      in_2: channel 2 input (right/bottom)
+ *      in_3: channel 3 input (vertex)
  *      out: output
- *      h_angle: horizontal steering angle in degrees
+ *      h_angle: horizontal steering angle in degrees (relative to input 1)
  *      v_angle: vertical steering angle in degrees
  *      opt_freq: frequency to optimise for
  *      t_win: covariance matrix time window
