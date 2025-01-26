@@ -1,7 +1,7 @@
 [package]
 name = "triforce-lv2"
 authors = ["James Calligeros"]
-description = "Minimum variance distortionless response beamformer for a very specific mic array"
+description = "Minimum variance distortionless response beamformer for Apple mic arrays"
 license = "GPL-2.0-or-later"
 repository = "https://github.com/chadmed/triforce"
 version = "0.1.0"
