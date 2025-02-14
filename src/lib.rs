@@ -25,8 +25,13 @@ use rustfft::{FftPlanner,num_complex::Complex,num_traits::Zero};
 
 const C: f32 = 343.00; /* m*s^-1 */
 
-// Let's just hard-code this for now
-const MIC_SPACING: f32 = 0.02; /* m */
+/// The distance of a given element in the array from the zeroth
+/// element
+#[derive(Copy, Clone)]
+struct ElemDistance {
+    x: f32,
+    y: f32,
+}
 
 /// Perform a Hilbert transform on a slice of f32s to give us the analytic signal of
 /// our input sample buffer. This is necessary to extract phase information from the
@@ -70,13 +75,10 @@ fn analytic_signal(signal: &[f32]) -> Vec<Complex<f32>> {
 /// The steering vector is a representation of the phase delays at each microphone.
 /// It is calculated by taking the dot product of the array geometry matrix and the
 /// unit vector of the direction of arrival.
-fn steering_vec(theta: f32, phi: f32, f: f32) -> DVector<Complex<f32>> {
+fn steering_vec(theta: f32, phi: f32, f: f32, elems: [ElemDistance; 3]) -> DVector<Complex<f32>> {
     // Mic positions are relative to Left/Top to preserve x/y axis semantics
-    let mic_positions: Vec<Vector3<f32>> = vec![
-        Vector3::new(0f32, 0f32, 0f32),
-        Vector3::new(MIC_SPACING, 0f32, 0f32),
-        Vector3::new(MIC_SPACING / 2f32, 3f32.sqrt() / (MIC_SPACING / 2f32), 0f32)
-    ];
+    let mic_positions: Vec<Vector3<f32>> =
+        elems.iter().map(|e| Vector3::new(e.x, e.y, 0f32)).collect();
 
     // Calculate angular repetency (2pi/lambda)
     let repetency = (2f32 * PI) / (f / C);
@@ -170,7 +172,11 @@ struct Ports {
     h_angle: InputPort<Control>,
     v_angle: InputPort<Control>,
     opt_freq: InputPort<Control>,
-    t_win: InputPort<Control>
+    t_win: InputPort<Control>,
+    mic2_x: InputPort<Control>,
+    mic2_y: InputPort<Control>,
+    mic3_x: InputPort<Control>,
+    mic3_y: InputPort<Control>,
 }
 
 /*
@@ -183,8 +189,9 @@ struct Triforce {
     freq_curr: f32,
     last_update: SystemTime,
     covar_window: Vec<Vec<Complex<f32>>>,
-    steering_vector: DVector<Complex::<f32>>,
-    covar: DMatrix<Complex::<f32>>,
+    steering_vector: DVector<Complex<f32>>,
+    covar: DMatrix<Complex<f32>>,
+    array_geom: [ElemDistance; 3],
 }
 
 trait Beamformer: Plugin {
@@ -206,11 +213,15 @@ impl Plugin for Triforce {
             covar_window: vec![
                 vec![Complex::new(0f32, 0f32); 256],
                 vec![Complex::new(0f32, 0f32); 256],
-                vec![Complex::new(0f32, 0f32); 256]
+                vec![Complex::new(0f32, 0f32); 256],
             ],
-            steering_vector: steering_vec(90f32.to_radians(),
-                                          45f32.to_radians(),
-                                          1000f32),
+            array_geom: [ElemDistance { x: 0f32, y: 0f32 }; 3],
+            steering_vector: steering_vec(
+                90f32.to_radians(),
+                45f32.to_radians(),
+                1000f32,
+                [ElemDistance { x: 0f32, y: 0f32 }; 3],
+            ),
             covar: DMatrix::zeros(3, 3),
         })
     }
@@ -274,15 +285,34 @@ impl Plugin for Triforce {
 
 impl Beamformer for Triforce {
     fn update_params(&mut self, ports: &mut Ports) {
-        if self.hangle_curr != *ports.h_angle ||
-            self.freq_curr != *ports.opt_freq ||
-            self.vangle_curr != *ports.v_angle {
+        if self.hangle_curr != *ports.h_angle
+            || self.freq_curr != *ports.opt_freq
+            || self.vangle_curr != *ports.v_angle
+            || self.array_geom[1].x != *ports.mic2_x
+            || self.array_geom[1].y != *ports.mic2_y
+            || self.array_geom[2].x != *ports.mic3_x
+            || self.array_geom[2].y != *ports.mic2_y
+        {
             self.hangle_curr = *ports.h_angle;
             self.vangle_curr = *ports.v_angle;
             self.freq_curr = *ports.opt_freq;
-            self.steering_vector = steering_vec(self.hangle_curr.to_radians(),
-                                                self.vangle_curr.to_radians(),
-                                                self.freq_curr);
+            self.array_geom = [
+                ElemDistance { x: 0f32, y: 0f32 },
+                ElemDistance {
+                    x: *ports.mic2_x,
+                    y: *ports.mic2_y,
+                },
+                ElemDistance {
+                    x: *ports.mic3_x,
+                    y: *ports.mic3_y,
+                },
+            ];
+            self.steering_vector = steering_vec(
+                self.hangle_curr.to_radians(),
+                self.vangle_curr.to_radians(),
+                self.freq_curr,
+                self.array_geom,
+            );
         }
     }
 }

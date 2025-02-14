@@ -121,4 +121,88 @@
             rdfs:label "200" ;
             rdf:value 200
         ]
+    ] , [
+        a lv2:InputPort ,
+            lv2:ControlPort ;
+        lv2:index 8 ;
+        lv2:symbol "mic2_x" ;
+        lv2:name "Mic 2 x" ;
+        lv2:portProperty epp:hasStrictBounds ;
+        lv2:default 0.02 ;
+        lv2:minimum 0.00 ;
+        lv2:maximum 1 ;
+        units:unit units:m ;
+        lv2:scalePoint [
+            rdfs:label "0.02" ;
+            rdf:value 0.02
+        ] , [
+            rdfs:label "0.05" ;
+            rdf:value 0.05
+        ] , [
+            rdfs:label "0.1" ;
+            rdf:value 0.1
+        ]
+    ], [
+        a lv2:InputPort ,
+            lv2:ControlPort ;
+        lv2:index 9 ;
+        lv2:symbol "mic2_y" ;
+        lv2:name "Mic 2 y" ;
+        lv2:portProperty epp:hasStrictBounds ;
+        lv2:default 0.02 ;
+        lv2:minimum 0.00 ;
+        lv2:maximum 1 ;
+        units:unit units:m ;
+        lv2:scalePoint [
+            rdfs:label "0.02" ;
+            rdf:value 0.02
+        ] , [
+            rdfs:label "0.05" ;
+            rdf:value 0.05
+        ] , [
+            rdfs:label "0.1" ;
+            rdf:value 0.1
+        ]
+    ] , [
+        a lv2:InputPort ,
+            lv2:ControlPort ;
+        lv2:index 10 ;
+        lv2:symbol "mic3_x" ;
+        lv2:name "Mic 3 x" ;
+        lv2:portProperty epp:hasStrictBounds ;
+        lv2:default 0.02 ;
+        lv2:minimum 0.00 ;
+        lv2:maximum 1 ;
+        units:unit units:m ;
+        lv2:scalePoint [
+            rdfs:label "0.02" ;
+            rdf:value 0.02
+        ] , [
+            rdfs:label "0.05" ;
+            rdf:value 0.05
+        ] , [
+            rdfs:label "0.1" ;
+            rdf:value 0.1
+        ]
+    ] , [
+        a lv2:InputPort ,
+            lv2:ControlPort ;
+        lv2:index 11 ;
+        lv2:symbol "mic3_y" ;
+        lv2:name "Mic 3 y" ;
+        lv2:portProperty epp:hasStrictBounds ;
+        lv2:default 0.02 ;
+        lv2:minimum 0.00 ;
+        lv2:maximum 1 ;
+        units:unit units:m ;
+        lv2:scalePoint [
+            rdfs:label "0.02" ;
+            rdf:value 0.02
+        ] , [
+            rdfs:label "0.05" ;
+            rdf:value 0.05
+        ] , [
+            rdfs:label "0.1" ;
+            rdf:value 0.1
+        ]
     ] .
