@@ -14,14 +14,9 @@ use std::time::SystemTime;
 
 use lv2::prelude::*;
 
-use nalgebra::{DMatrix,
-    DVector,
-    ComplexField,
-    Vector3,
-    linalg::SVD
-};
+use nalgebra::{linalg::SVD, ComplexField, DMatrix, DVector, Vector3};
 
-use rustfft::{FftPlanner,num_complex::Complex,num_traits::Zero};
+use rustfft::{num_complex::Complex, num_traits::Zero, FftPlanner};
 
 const C: f32 = 343.00; /* m*s^-1 */
 
@@ -40,9 +35,8 @@ fn analytic_signal(signal: &[f32]) -> Vec<Complex<f32>> {
     let len: usize = signal.len();
 
     // Convert each real sample into a complex sample
-    let mut complex_signal: Vec<Complex<f32>> = signal.iter()
-                                                      .map(|&x| Complex::new(x, 0.0))
-                                                      .collect();
+    let mut complex_signal: Vec<Complex<f32>> =
+        signal.iter().map(|&x| Complex::new(x, 0.0)).collect();
 
     // Set up the fft and inverse fft
     let mut planner = FftPlanner::new();
@@ -65,12 +59,10 @@ fn analytic_signal(signal: &[f32]) -> Vec<Complex<f32>> {
 
     // Turn the original complex buffer into the inverse FFT and then normalise
     ifft.process(&mut complex_signal);
-    complex_signal.iter_mut()
-                  .for_each(|x| *x /= len as f32);
+    complex_signal.iter_mut().for_each(|x| *x /= len as f32);
 
     complex_signal
 }
-
 
 /// The steering vector is a representation of the phase delays at each microphone.
 /// It is calculated by taking the dot product of the array geometry matrix and the
@@ -84,11 +76,7 @@ fn steering_vec(theta: f32, phi: f32, f: f32, elems: [ElemDistance; 3]) -> DVect
     let repetency = (2f32 * PI) / (f / C);
 
     // Compute the unit vector of the DOA
-    let u_dir = Vector3::new(
-        phi.sin() * theta.cos(),
-        phi.sin() * theta.sin(),
-        phi.cos(),
-    );
+    let u_dir = Vector3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos());
 
     // Calculate the steering vector by taking the array geometry, speed of sound,
     // and DOA unit vector
@@ -103,7 +91,6 @@ fn steering_vec(theta: f32, phi: f32, f: f32, elems: [ElemDistance; 3]) -> DVect
     steering_vector
 }
 
-
 /// There's nothing special about this, it's just a covariance matrix. It is always
 /// square.
 fn covariance(signals: &Vec<Vec<Complex<f32>>>) -> DMatrix<Complex<f32>> {
@@ -113,10 +100,8 @@ fn covariance(signals: &Vec<Vec<Complex<f32>>>) -> DMatrix<Complex<f32>> {
     let mut covar = DMatrix::zeros(n_mics, n_mics);
 
     for t in 0..n_samples {
-        let discrete: DVector<Complex<f32>> = DVector::from_iterator(
-            n_mics,
-            signals.iter().map(|s| s[t]),
-        );
+        let discrete: DVector<Complex<f32>> =
+            DVector::from_iterator(n_mics, signals.iter().map(|s| s[t]));
         covar += &discrete * discrete.adjoint();
     }
 
@@ -129,7 +114,6 @@ fn covariance(signals: &Vec<Vec<Complex<f32>>>) -> DMatrix<Complex<f32>> {
     covar /= Complex::new(n_samples as f32, 0f32);
     covar + reg
 }
-
 
 /// To calculate the weighting vector for the beamformer, we need to invert
 /// the covariance matrix, multiply it by the steering vector, then divide that
@@ -233,7 +217,7 @@ impl Plugin for Triforce {
         let inputs = vec![
             analytic_signal(*ports.in_1),
             analytic_signal(*ports.in_2),
-            analytic_signal(*ports.in_3)
+            analytic_signal(*ports.in_3),
         ];
         let num_samples = inputs[0].len();
         if num_samples < 1023 {
