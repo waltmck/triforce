@@ -1,9 +1,10 @@
 # Triforce - a beamformer for Apple Silicon laptops
 Triforce implements a Minimum Variance Distortionless Response adaptive beamformer
 for the microphone array found in the following Apple Silicon laptops:
+* MacBook Pro 13" (M1/M2)
+* MacBook Air 13" (M1/M2)
 * MacBook Pro 14" (M1 Pro/Max, M2 Pro/Max)
 * MacBook Pro 16" (M1 Pro/Max, M2 Pro/Max)
-* MacBook Air 13" (M2)
 * MacBook Air 15" (M2)
 
 ## Dependencies
@@ -13,7 +14,7 @@ crates specified in Cargo.lock, you will only require:
 
 ## Why?
 The Apple Silicon laptops mentioned above have an array of microphones arranged
-in a triangle. Much like with the speakers, Apple are trying way too hard to be
+either in a triangle or in a straight line. Much like with the speakers, Apple are trying way too hard to be
 fancy here, and implement an adaptive beamformer in userspace to try and isolate
 the desired signal from background noise. Without beamforming, the array is far
 too sensitive and omnidirectional to be at all useful. Thus, to make it useful outside
