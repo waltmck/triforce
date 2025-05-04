@@ -178,6 +178,7 @@ pub struct Triforce {
     covar: DMatrix<Complex<f32>>,
     array_geom: [ElemDistance; 3],
     fft_planner: Mutex<FftPlanner<f32>>,
+    weights: DVector<Complex<f32>>,
 }
 
 trait Beamformer: Plugin {
@@ -207,6 +208,7 @@ impl Triforce {
             ),
             covar: DMatrix::zeros(3, 3),
             fft_planner: Mutex::new(FftPlanner::new()),
+            weights: DVector::zeros(3),
         }
     }
 
@@ -238,13 +240,11 @@ impl Triforce {
             self.covar_window[0] = inputs[0][i + 1..num_samples].to_vec();
             self.covar_window[1] = inputs[1][i + 1..num_samples].to_vec();
             self.covar_window[2] = inputs[2][i + 1..num_samples].to_vec();
+            self.weights = mvdr_weights(&self.covar, &self.steering_vector);
         }
         else {
             self.samples_since_last_update += num_samples as u32;
         }
-
-        // Get the MVDR weights
-        let w = mvdr_weights(&self.covar, &self.steering_vector);
 
         // Now we can finally do the beamforming
         let mut out = vec![Complex::zero(); num_samples];
@@ -256,7 +256,7 @@ impl Triforce {
             );
 
             // Conjugate-linear dot product
-            out[t] = w.dotc(&discrete);
+            out[t] = self.weights.dotc(&discrete);
         }
 
         // Now we need to revert the Hilbert transform and output the signal
@@ -324,6 +324,9 @@ impl Beamformer for Triforce {
                 self.freq_curr,
                 self.array_geom,
             );
+
+            // The steering vector has changed
+            self.weights = mvdr_weights(&self.covar, &self.steering_vector);
         }
     }
 }
