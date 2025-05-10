@@ -186,6 +186,9 @@ impl Triforce {
 
     fn process_slice(&mut self, mic1: &[f32], mic2: &[f32], mic3: &[f32], output: &mut [f32], t_win: f32) {
 
+        // All three sample buffers will have the same number of samples
+        let num_samples = mic1.len();
+
         // Steering vector is relative to Left/Top mic
         let inputs = vec![
             analytic_signal(mic1),
@@ -193,19 +196,19 @@ impl Triforce {
             analytic_signal(mic3),
         ];
 
-        let num_samples = inputs[0].len();
-
         // Update the covariance matrix. We use an overlapping window to smooth over
         // the transitions.
         if self.samples_since_last_update as f32 >= (t_win / 1000f32) * self.sample_rate {
             self.samples_since_last_update = 0;
-            self.covar_window[0].extend_from_slice(&inputs[0][0..768]);
-            self.covar_window[1].extend_from_slice(&inputs[1][0..768]);
-            self.covar_window[2].extend_from_slice(&inputs[2][0..768]);
+            // We want a 1/3 overlap
+            let i = num_samples / 3;
+            self.covar_window[0].extend_from_slice(&inputs[0][0..i]);
+            self.covar_window[1].extend_from_slice(&inputs[1][0..i]);
+            self.covar_window[2].extend_from_slice(&inputs[2][0..i]);
             self.covar = covariance(&self.covar_window);
-            self.covar_window[0] = inputs[0][768..1024].to_vec();
-            self.covar_window[1] = inputs[1][768..1024].to_vec();
-            self.covar_window[2] = inputs[2][768..1024].to_vec();
+            self.covar_window[0] = inputs[0][i + 1..num_samples].to_vec();
+            self.covar_window[1] = inputs[1][i + 1..num_samples].to_vec();
+            self.covar_window[2] = inputs[2][i + 1..num_samples].to_vec();
         }
         else {
             self.samples_since_last_update += num_samples as u32;
