@@ -99,16 +99,14 @@ fn covariance(signals: &Vec<Vec<Complex<f32>>>) -> Matrix3<Complex<f32>> {
     let mut covar = Matrix3::zeros();
 
     for t in 0..n_samples {
-        let discrete: Vector3<Complex<f32>> =
-            Vector3::from_iterator(signals.iter().map(|s| s[t]));
+        let discrete: Vector3<Complex<f32>> = Vector3::from_iterator(signals.iter().map(|s| s[t]));
         covar += &discrete * discrete.adjoint();
     }
 
     // Our samples are shit, so we can't get a very nice covariance matrix.
     // Regularise the shit covariance matrix by introducing a constant value
     // across the identity
-    let reg = Matrix3::identity()
-        .map(|x: f32| Complex::new(x * 1e-4f32, 0f32));
+    let reg = Matrix3::identity().map(|x: f32| Complex::new(x * 1e-4f32, 0f32));
 
     covar /= Complex::new(n_samples as f32, 0f32);
     covar + reg
@@ -185,7 +183,6 @@ trait Beamformer: Plugin {
 }
 
 impl Triforce {
-
     pub fn with_sample_rate(sample_rate: f32) -> Self {
         Self {
             hangle_curr: 0f32,
@@ -211,8 +208,14 @@ impl Triforce {
         }
     }
 
-    pub fn process_slice(&mut self, mic1: &[f32], mic2: &[f32], mic3: &[f32], output: &mut [f32], t_win: f32) {
-
+    pub fn process_slice(
+        &mut self,
+        mic1: &[f32],
+        mic2: &[f32],
+        mic3: &[f32],
+        output: &mut [f32],
+        t_win: f32,
+    ) {
         // All three sample buffers will have the same number of samples
         let num_samples = mic1.len();
 
@@ -240,15 +243,13 @@ impl Triforce {
             self.covar_window[1] = inputs[1][i + 1..num_samples].to_vec();
             self.covar_window[2] = inputs[2][i + 1..num_samples].to_vec();
             self.weights = mvdr_weights(&self.covar, &self.steering_vector);
-        }
-        else {
+        } else {
             self.samples_since_last_update += num_samples as u32;
         }
 
         for t in 0..num_samples {
-            let discrete: Vector3<Complex<f32>> = Vector3::from_iterator(
-                inputs.iter().map(|s| s[t]),
-            );
+            let discrete: Vector3<Complex<f32>> =
+                Vector3::from_iterator(inputs.iter().map(|s| s[t]));
 
             let out =
                 // Conjugate-linear dot product
@@ -257,16 +258,14 @@ impl Triforce {
                 .re;
 
             // Do all of our NFP and clamping here
-            output[t] =
-                if out.is_finite() && !out.is_nan() {
-                    out.clamp(-10f32, 10f32)
-                } else {
-                    0f32
-                };
+            output[t] = if out.is_finite() && !out.is_nan() {
+                out.clamp(-10f32, 10f32)
+            } else {
+                0f32
+            };
         }
     }
 }
-
 
 impl Plugin for Triforce {
     type Ports = Ports;
@@ -283,7 +282,13 @@ impl Plugin for Triforce {
         if samples < 1024 {
             return;
         }
-        self.process_slice(&ports.in_1, &ports.in_2, &ports.in_3, &mut ports.out, *ports.t_win);
+        self.process_slice(
+            &ports.in_1,
+            &ports.in_2,
+            &ports.in_3,
+            &mut ports.out,
+            *ports.t_win,
+        );
     }
 }
 
