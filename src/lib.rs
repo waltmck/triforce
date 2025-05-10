@@ -13,7 +13,7 @@ use std::f32::consts::PI;
 
 use lv2::prelude::*;
 
-use nalgebra::{linalg::SVD, ComplexField, DMatrix, DVector, Vector3};
+use nalgebra::{linalg::SVD, ComplexField, Matrix3, Vector3};
 
 use rustfft::{num_complex::Complex, num_traits::Zero, FftPlanner};
 
@@ -67,7 +67,7 @@ fn analytic_signal(planner: &mut FftPlanner<f32>, signal: &[f32]) -> Vec<Complex
 /// The steering vector is a representation of the phase delays at each microphone.
 /// It is calculated by taking the dot product of the array geometry matrix and the
 /// unit vector of the direction of arrival.
-fn steering_vec(theta: f32, phi: f32, f: f32, elems: [ElemDistance; 3]) -> DVector<Complex<f32>> {
+fn steering_vec(theta: f32, phi: f32, f: f32, elems: [ElemDistance; 3]) -> Vector3<Complex<f32>> {
     // Mic positions are relative to Left/Top to preserve x/y axis semantics
     let mic_positions: Vec<Vector3<f32>> =
         elems.iter().map(|e| Vector3::new(e.x, e.y, 0f32)).collect();
@@ -80,7 +80,7 @@ fn steering_vec(theta: f32, phi: f32, f: f32, elems: [ElemDistance; 3]) -> DVect
 
     // Calculate the steering vector by taking the array geometry, speed of sound,
     // and DOA unit vector
-    let mut steering_vector = DVector::from_element(mic_positions.len(), Complex::new(0f32, 0f32));
+    let mut steering_vector = Vector3::from_element(Complex::new(0f32, 0f32));
 
     for (i, mic_pos) in mic_positions.iter().enumerate() {
         let delay = mic_pos.dot(&u_dir) / C;
@@ -93,22 +93,21 @@ fn steering_vec(theta: f32, phi: f32, f: f32, elems: [ElemDistance; 3]) -> DVect
 
 /// There's nothing special about this, it's just a covariance matrix. It is always
 /// square.
-fn covariance(signals: &Vec<Vec<Complex<f32>>>) -> DMatrix<Complex<f32>> {
-    let n_mics = signals.len();
+fn covariance(signals: &Vec<Vec<Complex<f32>>>) -> Matrix3<Complex<f32>> {
     let n_samples = signals[0].len();
 
-    let mut covar = DMatrix::zeros(n_mics, n_mics);
+    let mut covar = Matrix3::zeros();
 
     for t in 0..n_samples {
-        let discrete: DVector<Complex<f32>> =
-            DVector::from_iterator(n_mics, signals.iter().map(|s| s[t]));
+        let discrete: Vector3<Complex<f32>> =
+            Vector3::from_iterator(signals.iter().map(|s| s[t]));
         covar += &discrete * discrete.adjoint();
     }
 
     // Our samples are shit, so we can't get a very nice covariance matrix.
     // Regularise the shit covariance matrix by introducing a constant value
     // across the identity
-    let reg = DMatrix::identity(covar.nrows(), covar.ncols())
+    let reg = Matrix3::identity()
         .map(|x: f32| Complex::new(x * 1e-4f32, 0f32));
 
     covar /= Complex::new(n_samples as f32, 0f32);
@@ -121,7 +120,7 @@ fn covariance(signals: &Vec<Vec<Complex<f32>>>) -> DMatrix<Complex<f32>> {
 /// w = (cov^-1 * sv) / (sv.adjoint() * (cov^-1 * sv)). Note that the denominator
 /// is the same as the conjugate-linear dot product of the steering vector and
 /// the numerator.
-fn mvdr_weights(cov: &DMatrix<Complex<f32>>, sv: &DVector<Complex<f32>>) -> DVector<Complex<f32>> {
+fn mvdr_weights(cov: &Matrix3<Complex<f32>>, sv: &Vector3<Complex<f32>>) -> Vector3<Complex<f32>> {
     // Since we have a numerically unstable covariance matrix, we can't take the
     // true inverse of it. Let's instead decompose it and take the pseudoinverse.
     let svd = SVD::new(cov.to_owned(), true, true);
@@ -174,11 +173,11 @@ pub struct Triforce {
     sample_rate: f32,
     samples_since_last_update: u32,
     covar_window: Vec<Vec<Complex<f32>>>,
-    steering_vector: DVector<Complex<f32>>,
-    covar: DMatrix<Complex<f32>>,
+    steering_vector: Vector3<Complex<f32>>,
+    covar: Matrix3<Complex<f32>>,
     array_geom: [ElemDistance; 3],
     fft_planner: Mutex<FftPlanner<f32>>,
-    weights: DVector<Complex<f32>>,
+    weights: Vector3<Complex<f32>>,
 }
 
 trait Beamformer: Plugin {
@@ -206,9 +205,9 @@ impl Triforce {
                 1000f32,
                 [ElemDistance { x: 0f32, y: 0f32 }; 3],
             ),
-            covar: DMatrix::zeros(3, 3),
+            covar: Matrix3::zeros(),
             fft_planner: Mutex::new(FftPlanner::new()),
-            weights: DVector::zeros(3),
+            weights: Vector3::zeros(),
         }
     }
 
@@ -250,8 +249,7 @@ impl Triforce {
         let mut out = vec![Complex::zero(); num_samples];
 
         for t in 0..num_samples {
-            let discrete: DVector<Complex<f32>> = DVector::from_iterator(
-                3, // number of mics
+            let discrete: Vector3<Complex<f32>> = Vector3::from_iterator(
                 inputs.iter().map(|s| s[t]),
             );
 
