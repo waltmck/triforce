@@ -279,9 +279,6 @@ impl Plugin for Triforce {
 
     fn run(&mut self, ports: &mut Ports, _features: &mut (), samples: u32) {
         Beamformer::update_params(self, ports);
-        if samples < 1024 {
-            return;
-        }
         self.process_slice(
             &ports.in_1,
             &ports.in_2,
