@@ -32,9 +32,7 @@ struct ElemDistance {
 /// Perform a Hilbert transform on a slice of f32s to give us the analytic signal of
 /// our input sample buffer. This is necessary to extract phase information from the
 /// signal, and to make matrix operations a bit easier.
-fn analytic_signal(planner: &mut FftPlanner<f32>, signal: &[f32]) -> Vec<Complex<f32>> {
-    let len: usize = signal.len();
-
+fn analytic_signal(planner: &mut FftPlanner<f32>, signal: &[f32], len: usize) -> Vec<Complex<f32>> {
     // Convert each real sample into a complex sample
     let mut complex_signal: Vec<Complex<f32>> =
         signal.iter().map(|&x| Complex::new(x, 0.0)).collect();
@@ -93,9 +91,7 @@ fn steering_vec(theta: f32, phi: f32, f: f32, elems: [ElemDistance; 3]) -> Vecto
 
 /// There's nothing special about this, it's just a covariance matrix. It is always
 /// square.
-fn covariance(signals: &Vec<Vec<Complex<f32>>>) -> Matrix3<Complex<f32>> {
-    let n_samples = signals[0].len();
-
+fn covariance(signals: &Vec<Vec<Complex<f32>>>, n_samples: usize) -> Matrix3<Complex<f32>> {
     let mut covar = Matrix3::zeros();
 
     for t in 0..n_samples {
@@ -169,7 +165,7 @@ pub struct Triforce {
     vangle_curr: f32,
     freq_curr: f32,
     sample_rate: f32,
-    samples_since_last_update: u32,
+    samples_since_last_update: usize,
     covar_window: Vec<Vec<Complex<f32>>>,
     steering_vector: Vector3<Complex<f32>>,
     covar: Matrix3<Complex<f32>>,
@@ -188,7 +184,7 @@ impl Triforce {
             hangle_curr: 0f32,
             vangle_curr: 0f32,
             freq_curr: 1000f32,
-            samples_since_last_update: u32::max_value(),
+            samples_since_last_update: usize::max_value(),
             sample_rate,
             covar_window: vec![
                 vec![Complex::new(0f32, 0f32); 256],
@@ -215,17 +211,15 @@ impl Triforce {
         mic3: &[f32],
         output: &mut [f32],
         t_win: f32,
+        buf_len: usize
     ) {
-        // All three sample buffers will have the same number of samples
-        let num_samples = mic1.len();
-
         // Steering vector is relative to Left/Top mic
         let inputs = {
             let mut planner = self.fft_planner.lock().unwrap();
             vec![
-                analytic_signal(&mut planner, mic1),
-                analytic_signal(&mut planner, mic2),
-                analytic_signal(&mut planner, mic3),
+                analytic_signal(&mut planner, mic1, buf_len),
+                analytic_signal(&mut planner, mic2, buf_len),
+                analytic_signal(&mut planner, mic3, buf_len),
             ]
         };
 
@@ -234,20 +228,20 @@ impl Triforce {
         if self.samples_since_last_update as f32 >= (t_win / 1000f32) * self.sample_rate {
             self.samples_since_last_update = 0;
             // We want a 1/3 overlap
-            let i = num_samples / 3;
+            let i = buf_len / 3;
             self.covar_window[0].extend_from_slice(&inputs[0][0..i]);
             self.covar_window[1].extend_from_slice(&inputs[1][0..i]);
             self.covar_window[2].extend_from_slice(&inputs[2][0..i]);
-            self.covar = covariance(&self.covar_window);
-            self.covar_window[0] = inputs[0][i + 1..num_samples].to_vec();
-            self.covar_window[1] = inputs[1][i + 1..num_samples].to_vec();
-            self.covar_window[2] = inputs[2][i + 1..num_samples].to_vec();
+            self.covar = covariance(&self.covar_window, self.covar_window[0].len());
+            self.covar_window[0] = inputs[0][i + 1..buf_len].to_vec();
+            self.covar_window[1] = inputs[1][i + 1..buf_len].to_vec();
+            self.covar_window[2] = inputs[2][i + 1..buf_len].to_vec();
             self.weights = mvdr_weights(&self.covar, &self.steering_vector);
         } else {
-            self.samples_since_last_update += num_samples as u32;
+            self.samples_since_last_update += buf_len;
         }
 
-        for t in 0..num_samples {
+        for t in 0..buf_len {
             let discrete: Vector3<Complex<f32>> =
                 Vector3::from_iterator(inputs.iter().map(|s| s[t]));
 
@@ -285,6 +279,7 @@ impl Plugin for Triforce {
             &ports.in_3,
             &mut ports.out,
             *ports.t_win,
+            samples as usize
         );
     }
 }
