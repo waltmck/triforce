@@ -7,6 +7,10 @@ for the microphone array found in the following Apple Silicon laptops:
 * MacBook Pro 16" (M1 Pro/Max, M2 Pro/Max)
 * MacBook Air 15" (M2)
 
+**T2 Mac Support:** While Triforce works for many T2 Mac models, this use case is not
+officially supported. Any issues related to T2 Macs will be closed immediately. Please
+go to the T2 Linux Discord for support instead.
+
 ## Dependencies
 Triforce tries to keep dependencies to a minimum. On top of the
 crates specified in Cargo.lock, you will only require:
