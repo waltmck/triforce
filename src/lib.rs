@@ -13,7 +13,7 @@ use std::f32::consts::PI;
 
 use lv2::prelude::*;
 
-use nalgebra::{linalg::SVD, Matrix3, Vector3};
+use nalgebra::{Matrix3, Vector3};
 
 use rustfft::{num_complex::Complex, num_traits::Zero, FftPlanner};
 
@@ -115,22 +115,12 @@ fn covariance(signals: &Vec<Vec<Complex<f32>>>, n_samples: usize) -> Matrix3<Com
     covar + reg
 }
 
-/// To calculate the weighting vector for the beamformer, we need to invert
-/// the covariance matrix, multiply it by the steering vector, then divide that
-/// by itself multiplied by the Hermitian transpose of the steering vector
-/// w = (cov^-1 * sv) / (sv.adjoint() * (cov^-1 * sv)). Note that the denominator
-/// is the same as the conjugate-linear dot product of the steering vector and
-/// the numerator.
+#[inline]
 fn mvdr_weights(cov: &Matrix3<Complex<f32>>, sv: &Vector3<Complex<f32>>) -> Vector3<Complex<f32>> {
-    // Since we have a numerically unstable covariance matrix, we can't take the
-    // true inverse of it. Let's instead decompose it and take the pseudoinverse.
-    let svd = SVD::new(cov.to_owned(), true, true);
-    let r_inv = svd.pseudo_inverse(1e-4f32).unwrap();
-
-    let num = r_inv * sv;
-    let den = sv.dotc(&num); // Conjugate-linear dot product
-
-    num / den
+    return match mvdr_weights_socp(&cov, &sv, R) {
+        Some(v) => v,
+        None => Vector3::zeros(),
+    };
 }
 
 /// Robust MVDR weights using second-order cone programming (SOCP)
@@ -140,7 +130,7 @@ pub fn mvdr_weights_socp(
     cov: &Matrix3<Complex<f32>>,
     sv: &Vector3<Complex<f32>>,
     eps: f64,
-) -> Vector3<Complex<f32>> {
+) -> Option<Vector3<Complex<f32>>> {
     const N: usize = 3;
     const N2: usize = 2 * N; // 6
     const NX: usize = N2 + 1; // w(6) + tau(1) = 7
@@ -161,7 +151,11 @@ pub fn mvdr_weights_socp(
     }
 
     // ---- Cholesky and real/imag blocks of U = L^H ----
-    let chol = cov64.cholesky().expect("Covariance not HPD");
+    let chol = match cov64.cholesky() {
+        Some(m) => m,
+        None => return None,
+    };
+
     let U = chol.l().adjoint();
     let mut Ur = [[0.0f64; N]; N];
     let mut Ui = [[0.0f64; N]; N];
@@ -270,14 +264,17 @@ pub fn mvdr_weights_socp(
 
     solver.solve();
 
-    let x = &solver.solution.x;
-
-    // w = Re + j Im
-    Vector3::new(
-        Complex::new(x[0] as f32, x[3] as f32),
-        Complex::new(x[1] as f32, x[4] as f32),
-        Complex::new(x[2] as f32, x[5] as f32),
-    )
+    return match solver.solution.status {
+        clarabel::solver::SolverStatus::Solved => {
+            let x = &solver.solution.x;
+            Some(Vector3::new(
+                Complex::new(x[0] as f32, x[3] as f32),
+                Complex::new(x[1] as f32, x[4] as f32),
+                Complex::new(x[2] as f32, x[5] as f32),
+            ))
+        }
+        _ => None,
+    };
 }
 
 /*
@@ -390,7 +387,7 @@ impl Triforce {
             self.covar_window[1].extend_from_slice(&self.inputs[1][i..buf_len]);
             self.covar_window[2].clear();
             self.covar_window[2].extend_from_slice(&self.inputs[2][i..buf_len]);
-            self.weights = mvdr_weights_socp(&self.covar, &self.steering_vector, R);
+            self.weights = mvdr_weights(&self.covar, &self.steering_vector);
         } else {
             self.samples_since_last_update += buf_len;
         }
@@ -470,7 +467,7 @@ impl Beamformer for Triforce {
             );
 
             // The steering vector has changed
-            self.weights = mvdr_weights_socp(&self.covar, &self.steering_vector, R);
+            self.weights = mvdr_weights(&self.covar, &self.steering_vector);
         }
     }
 }
