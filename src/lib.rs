@@ -17,7 +17,11 @@ use nalgebra::{linalg::SVD, Matrix3, Vector3};
 
 use rustfft::{num_complex::Complex, num_traits::Zero, FftPlanner};
 
+use clarabel::{algebra::*, solver::*};
+
 const C: f32 = 343.00; /* m*s^-1 */
+
+const R: f64 = 0.01; /* Robustness parameter */
 
 /// The distance of a given element in the array from the zeroth
 /// element
@@ -30,8 +34,12 @@ struct ElemDistance {
 /// Perform a Hilbert transform on a slice of f32s to give us the analytic signal of
 /// our input sample buffer. This is necessary to extract phase information from the
 /// signal, and to make matrix operations a bit easier.
-fn analytic_signal(planner: &mut FftPlanner<f32>, signal: &[f32], len: usize, output: &mut Vec<Complex<f32>>) {
-
+fn analytic_signal(
+    planner: &mut FftPlanner<f32>,
+    signal: &[f32],
+    len: usize,
+    output: &mut Vec<Complex<f32>>,
+) {
     // Convert each real sample into a complex sample
     output.resize(len, Complex::zero());
     for (o, i) in output.iter_mut().zip(signal.iter()) {
@@ -125,6 +133,153 @@ fn mvdr_weights(cov: &Matrix3<Complex<f32>>, sv: &Vector3<Complex<f32>>) -> Vect
     num / den
 }
 
+/// Robust MVDR weights using second-order cone programming (SOCP)
+#[inline]
+#[allow(non_snake_case)]
+pub fn mvdr_weights_socp(
+    cov: &Matrix3<Complex<f32>>,
+    sv: &Vector3<Complex<f32>>,
+    eps: f64,
+) -> Vector3<Complex<f32>> {
+    const N: usize = 3;
+    const N2: usize = 2 * N; // 6
+    const NX: usize = N2 + 1; // w(6) + tau(1) = 7
+    const M: usize = 2 * (N2 + 1) + 1; // Q^7 + Q^7 + Zero^1 = 15
+
+    // ---- promote to f64 ----
+    let mut cov64 = Matrix3::<Complex<f64>>::zeros();
+    for i in 0..N {
+        for j in 0..N {
+            cov64[(i, j)] = Complex::<f64>::new(cov[(i, j)].re as f64, cov[(i, j)].im as f64);
+        }
+    }
+    let mut sv_re = [0.0f64; N];
+    let mut sv_im = [0.0f64; N];
+    for k in 0..N {
+        sv_re[k] = sv[k].re as f64;
+        sv_im[k] = sv[k].im as f64;
+    }
+
+    // ---- Cholesky and real/imag blocks of U = L^H ----
+    let chol = cov64.cholesky().expect("Covariance not HPD");
+    let U = chol.l().adjoint();
+    let mut Ur = [[0.0f64; N]; N];
+    let mut Ui = [[0.0f64; N]; N];
+    for i in 0..N {
+        for j in 0..N {
+            Ur[i][j] = U[(i, j)].re;
+            Ui[i][j] = U[(i, j)].im;
+        }
+    }
+
+    // a = [Re(sv); Im(sv)],  abar = [Im(sv); -Re(sv)]
+    let mut a = [0.0f64; N2];
+    let mut abar = [0.0f64; N2];
+    for k in 0..N {
+        a[k] = sv_re[k];
+        a[N + k] = sv_im[k];
+        abar[k] = sv_im[k];
+        abar[N + k] = -sv_re[k];
+    }
+
+    // ---- Build A x + s = b  ----
+    let mut I: Vec<usize> = Vec::with_capacity(55);
+    let mut J: Vec<usize> = Vec::with_capacity(55);
+    let mut V: Vec<f64> = Vec::with_capacity(55);
+    let mut b: Vec<f64> = vec![0.0; M];
+
+    // SOC #1: [tau; U' w] ∈ Q^7  -> s1 = L1 x, use A1 = -L1, b1 = 0
+    // row 0: pick tau
+    I.push(0);
+    J.push(N2);
+    V.push(-1.0);
+    // rows 1..6: -U' * w
+    for i in 0..N2 {
+        for j in 0..N2 {
+            let val = if i < N && j < N {
+                -Ur[i][j]
+            } else if i < N && j >= N {
+                -(-Ui[i][j - N])
+            } else if i >= N && j < N {
+                -(Ui[i - N][j])
+            } else {
+                -Ur[i - N][j - N]
+            };
+            if val != 0.0 {
+                I.push(1 + i);
+                J.push(j);
+                V.push(val);
+            }
+        }
+    }
+
+    // SOC #2: [a^T w - 1; eps * w] ∈ Q^7
+    let base = N2 + 1; // 7
+    b[base] = -1.0; // constant in first component
+                    // top row: -a^T w
+    for j in 0..N2 {
+        let aj = a[j];
+        if aj != 0.0 {
+            I.push(base);
+            J.push(j);
+            V.push(-aj);
+        }
+    }
+    // rows base+1..base+6: -eps * w_i
+    for i in 0..N2 {
+        I.push(base + 1 + i);
+        J.push(i);
+        V.push(-eps);
+    }
+
+    // Equality: abar^T w = 0  -> Zero cone row
+    let eq_row = M - 1; // 14
+    for j in 0..N2 {
+        let cj = abar[j];
+        if cj != 0.0 {
+            I.push(eq_row);
+            J.push(j);
+            V.push(cj);
+        }
+    }
+
+    let A = CscMatrix::new_from_triplets(M, NX, I, J, V);
+
+    // P = 0, q selects tau
+    let P = CscMatrix::<f64>::zeros((NX, NX));
+    let q = {
+        let mut q = vec![0.0f64; NX];
+        q[NX - 1] = 1.0;
+        q
+    };
+
+    // Cones
+    let cones = [
+        SecondOrderConeT(N2 + 1),
+        SecondOrderConeT(N2 + 1),
+        ZeroConeT(1),
+    ];
+
+    let settings = DefaultSettingsBuilder::default()
+        .verbose(false)
+        .build()
+        .unwrap();
+
+    let mut solver =
+        DefaultSolver::new(&P, &q, &A, &b, &cones, settings).expect("Could not create solver");
+
+    solver.solve();
+
+    let x = &solver.solution.x;
+
+    // w = Re + j Im
+    Vector3::new(
+        Complex::new(x[0] as f32, x[3] as f32),
+        Complex::new(x[1] as f32, x[4] as f32),
+        Complex::new(x[2] as f32, x[5] as f32),
+    )
+}
+
 /*
  * Input and output ports used by the plugin
  *
@@ -212,7 +367,7 @@ impl Triforce {
         mic3: &[f32],
         output: &mut [f32],
         t_win: f32,
-        buf_len: usize
+        buf_len: usize,
     ) {
         // Steering vector is relative to Left/Top mic
         analytic_signal(&mut self.fft_planner, mic1, buf_len, &mut self.inputs[0]);
@@ -235,7 +390,7 @@ impl Triforce {
             self.covar_window[1].extend_from_slice(&self.inputs[1][i..buf_len]);
             self.covar_window[2].clear();
             self.covar_window[2].extend_from_slice(&self.inputs[2][i..buf_len]);
-            self.weights = mvdr_weights(&self.covar, &self.steering_vector);
+            self.weights = mvdr_weights_socp(&self.covar, &self.steering_vector, R);
         } else {
             self.samples_since_last_update += buf_len;
         }
@@ -278,7 +433,7 @@ impl Plugin for Triforce {
             &ports.in_3,
             &mut ports.out,
             *ports.t_win,
-            samples as usize
+            samples as usize,
         );
     }
 }
@@ -315,7 +470,7 @@ impl Beamformer for Triforce {
             );
 
             // The steering vector has changed
-            self.weights = mvdr_weights(&self.covar, &self.steering_vector);
+            self.weights = mvdr_weights_socp(&self.covar, &self.steering_vector, R);
         }
     }
 }
