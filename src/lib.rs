@@ -21,7 +21,16 @@ use clarabel::{algebra::*, solver::*};
 
 const C: f32 = 343.00; /* m*s^-1 */
 
-const R: f64 = 0.5; /* Robustness parameter */
+/* Robustness parameter
+* Setting to zero exactly matches behavior of
+* non-robust beamformer, setting to higher values
+* will be more robust to errors in steering vector */
+const R: f64 = 0.1;
+
+/* Diagonal loading constant for covariance matrix
+* This should be as small as possible to to prevent
+* numerical issues from a near-zero covariance eigenvalue */
+const C_DL: f64 = 0.0001;
 
 /// The distance of a given element in the array from the zeroth
 /// element
@@ -109,15 +118,32 @@ fn covariance(signals: &Vec<Vec<Complex<f32>>>, n_samples: usize) -> Matrix3<Com
     // Our samples are shit, so we can't get a very nice covariance matrix.
     // Regularise the shit covariance matrix by introducing a constant value
     // across the identity
-    let reg = Matrix3::identity().map(|x: f32| Complex::new(x * 1e-4f32, 0f32));
+    // let reg = Matrix3::identity().map(|x: f32| Complex::new(x * 1e-4f32, 0f32));
 
     covar /= Complex::new(n_samples as f32, 0f32);
-    covar + reg
+    covar // + reg
 }
 
 #[inline]
 fn mvdr_weights(cov: &Matrix3<Complex<f32>>, sv: &Vector3<Complex<f32>>) -> Vector3<Complex<f32>> {
-    return match mvdr_weights_socp(&cov, &sv, R) {
+    // J is 3x3 exchange matrix
+    const J: Matrix3<Complex<f32>> = Matrix3::new(
+        Complex::new(0.0, 0.0),
+        Complex::new(0.0, 0.0),
+        Complex::new(1.0, 0.0),
+        Complex::new(0.0, 0.0),
+        Complex::new(1.0, 0.0),
+        Complex::new(0.0, 0.0),
+        Complex::new(1.0, 0.0),
+        Complex::new(0.0, 0.0),
+        Complex::new(0.0, 0.0),
+    );
+
+    // Covariance matrix from forward-backward averaging,
+    // which empirically reduces correlation between signals
+    let cov_fba = (cov + J * cov.conjugate() * J).scale(0.5);
+
+    return match mvdr_weights_socp(&cov_fba, &sv, R) {
         Some(v) => v,
         None => Vector3::zeros(),
     };
@@ -136,11 +162,11 @@ fn mvdr_weights_socp(
     const NX: usize = N2 + 1; // w(6) + tau(1) = 7
     const M: usize = 2 * (N2 + 1) + 1; // Q^7 + Q^7 + Zero^1 = 15
 
-    // ---- promote to f64 ----
-    let mut cov64 = Matrix3::<Complex<f64>>::zeros();
+    // ---- promote to f64 and do diagonal loading ----
+    let mut cov64 = Matrix3::<Complex<f64>>::from_diagonal_element(Complex::<f64>::new(C_DL, 0.0));
     for i in 0..N {
         for j in 0..N {
-            cov64[(i, j)] = Complex::<f64>::new(cov[(i, j)].re as f64, cov[(i, j)].im as f64);
+            cov64[(i, j)] += Complex::<f64>::new(cov[(i, j)].re as f64, cov[(i, j)].im as f64);
         }
     }
     let mut sv_re = [0.0f64; N];
