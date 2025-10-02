@@ -21,7 +21,7 @@ use clarabel::{algebra::*, solver::*};
 
 const C: f32 = 343.00; /* m*s^-1 */
 
-const R: f64 = 0.01; /* Robustness parameter */
+const R: f64 = 0.5; /* Robustness parameter */
 
 /// The distance of a given element in the array from the zeroth
 /// element
@@ -126,7 +126,7 @@ fn mvdr_weights(cov: &Matrix3<Complex<f32>>, sv: &Vector3<Complex<f32>>) -> Vect
 /// Robust MVDR weights using second-order cone programming (SOCP)
 #[inline]
 #[allow(non_snake_case)]
-pub fn mvdr_weights_socp(
+fn mvdr_weights_socp(
     cov: &Matrix3<Complex<f32>>,
     sv: &Vector3<Complex<f32>>,
     eps: f64,
