@@ -30,7 +30,7 @@ const R: f64 = 0.1;
 /* Diagonal loading constant for covariance matrix
 * This should be as small as possible to to prevent
 * numerical issues from a near-zero covariance eigenvalue */
-const C_DL: f64 = 0.0001;
+const C_DL: f64 = 1e-5;
 
 /// The distance of a given element in the array from the zeroth
 /// element
@@ -43,11 +43,13 @@ struct ElemDistance {
 /// Perform a Hilbert transform on a slice of f32s to give us the analytic signal of
 /// our input sample buffer. This is necessary to extract phase information from the
 /// signal, and to make matrix operations a bit easier.
+#[inline]
 fn analytic_signal(
     planner: &mut FftPlanner<f32>,
     signal: &[f32],
     len: usize,
     output: &mut Vec<Complex<f32>>,
+    fft_scratch: &mut Vec<Complex<f32>>,
 ) {
     // Convert each real sample into a complex sample
     output.resize(len, Complex::zero());
@@ -60,7 +62,7 @@ fn analytic_signal(
     let ifft = planner.plan_fft_inverse(len);
 
     // Mutate the output buffer into the forward FFT
-    fft.process(output);
+    fft.process_with_scratch(output, fft_scratch);
 
     // Perform the Hilbert transform on the FFT. To do this, we multiply every
     // positive sample under the Nyquist limit by 2+0j, and destroy every sample
@@ -74,7 +76,7 @@ fn analytic_signal(
     }
 
     // Turn the original complex buffer into the inverse FFT and then normalise
-    ifft.process(output);
+    ifft.process_with_scratch(output, fft_scratch);
     output.iter_mut().for_each(|x| *x /= len as f32);
 }
 
@@ -107,11 +109,16 @@ fn steering_vec(theta: f32, phi: f32, f: f32, elems: [ElemDistance; 3]) -> Vecto
 
 /// There's nothing special about this, it's just a covariance matrix. It is always
 /// square.
-fn covariance(signals: &Vec<Vec<Complex<f32>>>, n_samples: usize) -> Matrix3<Complex<f32>> {
+#[inline]
+fn covariance(signals: &Vec<Vec<Complex<f32>>>, n_samples: usize) -> Matrix3<Complex<f64>> {
     let mut covar = Matrix3::zeros();
 
     for t in 0..n_samples {
-        let discrete: Vector3<Complex<f32>> = Vector3::from_iterator(signals.iter().map(|s| s[t]));
+        let discrete: Vector3<Complex<f64>> = Vector3::from_iterator(
+            signals
+                .iter()
+                .map(|s| Complex::new(s[t].re as f64, s[t].im as f64)),
+        );
         covar += &discrete * discrete.adjoint();
     }
 
@@ -120,14 +127,14 @@ fn covariance(signals: &Vec<Vec<Complex<f32>>>, n_samples: usize) -> Matrix3<Com
     // across the identity
     // let reg = Matrix3::identity().map(|x: f32| Complex::new(x * 1e-4f32, 0f32));
 
-    covar /= Complex::new(n_samples as f32, 0f32);
+    covar /= Complex::new(n_samples as f64, 0f64);
     covar // + reg
 }
 
 #[inline]
-fn mvdr_weights(cov: &Matrix3<Complex<f32>>, sv: &Vector3<Complex<f32>>) -> Vector3<Complex<f32>> {
+fn mvdr_weights(cov: &Matrix3<Complex<f64>>, sv: &Vector3<Complex<f32>>) -> Vector3<Complex<f32>> {
     // J is 3x3 exchange matrix
-    const J: Matrix3<Complex<f32>> = Matrix3::new(
+    const J: Matrix3<Complex<f64>> = Matrix3::new(
         Complex::new(0.0, 0.0),
         Complex::new(0.0, 0.0),
         Complex::new(1.0, 0.0),
@@ -153,7 +160,7 @@ fn mvdr_weights(cov: &Matrix3<Complex<f32>>, sv: &Vector3<Complex<f32>>) -> Vect
 #[inline]
 #[allow(non_snake_case)]
 fn mvdr_weights_socp(
-    cov: &Matrix3<Complex<f32>>,
+    cov: &Matrix3<Complex<f64>>,
     sv: &Vector3<Complex<f32>>,
     eps: f64,
 ) -> Option<Vector3<Complex<f32>>> {
@@ -162,13 +169,10 @@ fn mvdr_weights_socp(
     const NX: usize = N2 + 1; // w(6) + tau(1) = 7
     const M: usize = 2 * (N2 + 1) + 1; // Q^7 + Q^7 + Zero^1 = 15
 
-    // ---- promote to f64 and do diagonal loading ----
-    let mut cov64 = Matrix3::<Complex<f64>>::from_diagonal_element(Complex::<f64>::new(C_DL, 0.0));
-    for i in 0..N {
-        for j in 0..N {
-            cov64[(i, j)] += Complex::<f64>::new(cov[(i, j)].re as f64, cov[(i, j)].im as f64);
-        }
-    }
+    // ---- diagonal loading ----
+    let cov_loaded =
+        cov + Matrix3::<Complex<f64>>::from_diagonal_element(Complex::<f64>::new(C_DL, 0.0));
+
     let mut sv_re = [0.0f64; N];
     let mut sv_im = [0.0f64; N];
     for k in 0..N {
@@ -177,7 +181,7 @@ fn mvdr_weights_socp(
     }
 
     // ---- Cholesky and real/imag blocks of U = L^H ----
-    let chol = match cov64.cholesky() {
+    let chol = match cov_loaded.cholesky() {
         Some(m) => m,
         None => return None,
     };
@@ -345,11 +349,12 @@ pub struct Triforce {
     samples_since_last_update: usize,
     covar_window: Vec<Vec<Complex<f32>>>,
     steering_vector: Vector3<Complex<f32>>,
-    covar: Matrix3<Complex<f32>>,
+    covar: Matrix3<Complex<f64>>,
     array_geom: [ElemDistance; 3],
     fft_planner: FftPlanner<f32>,
     weights: Vector3<Complex<f32>>,
     inputs: [Vec<Complex<f32>>; 3],
+    fft_scratch: Vec<Complex<f32>>,
 }
 
 trait Beamformer: Plugin {
@@ -380,6 +385,7 @@ impl Triforce {
             fft_planner: FftPlanner::new(),
             weights: Vector3::zeros(),
             inputs: [Vec::new(), Vec::new(), Vec::new()],
+            fft_scratch: Vec::with_capacity(0),
         }
     }
 
@@ -392,10 +398,32 @@ impl Triforce {
         t_win: f32,
         buf_len: usize,
     ) {
+        if buf_len > self.fft_scratch.len() {
+            self.fft_scratch.resize(buf_len, Complex::zero());
+        }
+
         // Steering vector is relative to Left/Top mic
-        analytic_signal(&mut self.fft_planner, mic1, buf_len, &mut self.inputs[0]);
-        analytic_signal(&mut self.fft_planner, mic2, buf_len, &mut self.inputs[1]);
-        analytic_signal(&mut self.fft_planner, mic3, buf_len, &mut self.inputs[2]);
+        analytic_signal(
+            &mut self.fft_planner,
+            mic1,
+            buf_len,
+            &mut self.inputs[0],
+            &mut self.fft_scratch,
+        );
+        analytic_signal(
+            &mut self.fft_planner,
+            mic2,
+            buf_len,
+            &mut self.inputs[1],
+            &mut self.fft_scratch,
+        );
+        analytic_signal(
+            &mut self.fft_planner,
+            mic3,
+            buf_len,
+            &mut self.inputs[2],
+            &mut self.fft_scratch,
+        );
 
         // Update the covariance matrix. We use an overlapping window to smooth over
         // the transitions.
@@ -403,6 +431,7 @@ impl Triforce {
             self.samples_since_last_update = 0;
             // We want a 1/3 overlap
             let i = buf_len / 3;
+
             self.covar_window[0].extend_from_slice(&self.inputs[0][0..i]);
             self.covar_window[1].extend_from_slice(&self.inputs[1][0..i]);
             self.covar_window[2].extend_from_slice(&self.inputs[2][0..i]);
@@ -413,6 +442,7 @@ impl Triforce {
             self.covar_window[1].extend_from_slice(&self.inputs[1][i..buf_len]);
             self.covar_window[2].clear();
             self.covar_window[2].extend_from_slice(&self.inputs[2][i..buf_len]);
+
             self.weights = mvdr_weights(&self.covar, &self.steering_vector);
         } else {
             self.samples_since_last_update += buf_len;
