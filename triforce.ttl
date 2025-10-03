@@ -107,24 +107,39 @@
         lv2:symbol "t_win" ;
         lv2:name "Time Window" ;
         lv2:portProperty epp:hasStrictBounds ;
-        lv2:default 100 ;
+        lv2:default 2500 ;
         lv2:minimum 100 ;
-        lv2:maximum 3500 ;
+        lv2:maximum 10000 ;
         units:unit units:ms ;
         lv2:scalePoint [
-            rdfs:label "20" ;
-            rdf:value 20
+            rdfs:label "1000" ;
+            rdf:value 1000
         ] , [
-            rdfs:label "100" ;
-            rdf:value 100
-        ] , [
-            rdfs:label "200" ;
-            rdf:value 200
+            rdfs:label "2500" ;
+            rdf:value 2500
         ]
     ] , [
         a lv2:InputPort ,
             lv2:ControlPort ;
         lv2:index 8 ;
+        lv2:symbol "t_bf" ;
+        lv2:name "Beamforming interval" ;
+        lv2:portProperty epp:hasStrictBounds ;
+        lv2:default 1000 ;
+        lv2:minimum 100 ;
+        lv2:maximum 10000 ;
+        units:unit units:ms ;
+        lv2:scalePoint [
+            rdfs:label "1000" ;
+            rdf:value 1000
+        ] , [
+            rdfs:label "2500" ;
+            rdf:value 2500
+        ]
+    ] , [
+        a lv2:InputPort ,
+            lv2:ControlPort ;
+        lv2:index 9 ;
         lv2:symbol "mic2_x" ;
         lv2:name "Mic 2 x" ;
         lv2:portProperty epp:hasStrictBounds ;
@@ -145,7 +160,7 @@
     ], [
         a lv2:InputPort ,
             lv2:ControlPort ;
-        lv2:index 9 ;
+        lv2:index 10 ;
         lv2:symbol "mic2_y" ;
         lv2:name "Mic 2 y" ;
         lv2:portProperty epp:hasStrictBounds ;
@@ -166,7 +181,7 @@
     ] , [
         a lv2:InputPort ,
             lv2:ControlPort ;
-        lv2:index 10 ;
+        lv2:index 11 ;
         lv2:symbol "mic3_x" ;
         lv2:name "Mic 3 x" ;
         lv2:portProperty epp:hasStrictBounds ;
@@ -187,7 +202,7 @@
     ] , [
         a lv2:InputPort ,
             lv2:ControlPort ;
-        lv2:index 11 ;
+        lv2:index 12 ;
         lv2:symbol "mic3_y" ;
         lv2:name "Mic 3 y" ;
         lv2:portProperty epp:hasStrictBounds ;

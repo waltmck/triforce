@@ -32,14 +32,6 @@ const R: f64 = 0.1;
 * numerical issues from a near-zero covariance eigenvalue */
 const C_DL: f64 = 1e-5;
 
-const COVAR_RBUFFER_SZ: usize = 125;
-
-/* Time between covariance matrix computations */
-const T_COV: f32 = 0.02; // This is every tick, for 48kHz 1000-sample signals
-
-/* Time between weight updates */
-const T_WEIGHTS: f32 = 1.0; // was 100.0
-
 /// The distance of a given element in the array from the zeroth
 /// element
 #[derive(Copy, Clone)]
@@ -51,7 +43,6 @@ struct ElemDistance {
 /// Perform a Hilbert transform on a slice of f32s to give us the analytic signal of
 /// our input sample buffer. This is necessary to extract phase information from the
 /// signal, and to make matrix operations a bit easier.
-#[inline]
 fn analytic_signal(
     planner: &mut FftPlanner<f32>,
     signal: &[f32],
@@ -117,7 +108,6 @@ fn steering_vec(theta: f32, phi: f32, f: f32, elems: [ElemDistance; 3]) -> Vecto
 
 /// There's nothing special about this, it's just a covariance matrix. It is always
 /// square.
-#[inline]
 fn covariance(signals: &[Vec<Complex<f32>>], n_samples: usize) -> Matrix3<Complex<f64>> {
     let mut covar = Matrix3::zeros();
 
@@ -129,17 +119,10 @@ fn covariance(signals: &[Vec<Complex<f32>>], n_samples: usize) -> Matrix3<Comple
         );
         covar += &discrete * discrete.adjoint();
     }
-
-    // Our samples are shit, so we can't get a very nice covariance matrix.
-    // Regularise the shit covariance matrix by introducing a constant value
-    // across the identity
-    // let reg = Matrix3::identity().map(|x: f32| Complex::new(x * 1e-4f32, 0f32));
-
     covar /= Complex::new(n_samples as f64, 0f64);
-    covar // + reg
+    covar
 }
 
-#[inline]
 fn mvdr_weights(cov: &Matrix3<Complex<f64>>, sv: &Vector3<Complex<f32>>) -> Vector3<Complex<f32>> {
     // J is 3x3 exchange matrix
     const J: Matrix3<Complex<f64>> = Matrix3::new(
@@ -156,7 +139,8 @@ fn mvdr_weights(cov: &Matrix3<Complex<f64>>, sv: &Vector3<Complex<f32>>) -> Vect
 
     // Covariance matrix from forward-backward averaging,
     // which empirically reduces correlation between signals
-    let cov_fba = (cov + J * cov.conjugate() * J).scale(0.5);
+    let cov_fba = (cov + J * cov.conjugate() * J).scale(0.5)
+        + Matrix3::<Complex<f64>>::from_diagonal_element(Complex::<f64>::new(C_DL, 0.0));
 
     return match mvdr_weights_socp(&cov_fba, &sv, R) {
         Some(v) => v,
@@ -165,7 +149,6 @@ fn mvdr_weights(cov: &Matrix3<Complex<f64>>, sv: &Vector3<Complex<f32>>) -> Vect
 }
 
 /// Robust MVDR weights using second-order cone programming (SOCP)
-#[inline]
 #[allow(non_snake_case)]
 fn mvdr_weights_socp(
     cov: &Matrix3<Complex<f64>>,
@@ -177,10 +160,6 @@ fn mvdr_weights_socp(
     const NX: usize = N2 + 1; // w(6) + tau(1) = 7
     const M: usize = 2 * (N2 + 1) + 1; // Q^7 + Q^7 + Zero^1 = 15
 
-    // ---- diagonal loading ----
-    let cov_loaded =
-        cov + Matrix3::<Complex<f64>>::from_diagonal_element(Complex::<f64>::new(C_DL, 0.0));
-
     let mut sv_re = [0.0f64; N];
     let mut sv_im = [0.0f64; N];
     for k in 0..N {
@@ -189,7 +168,7 @@ fn mvdr_weights_socp(
     }
 
     // ---- Cholesky and real/imag blocks of U = L^H ----
-    let chol = match cov_loaded.cholesky() {
+    let chol = match cov.cholesky() {
         Some(m) => m,
         None => return None,
     };
@@ -285,7 +264,6 @@ fn mvdr_weights_socp(
         q
     };
 
-    // Cones
     let cones = [
         SecondOrderConeT(N2 + 1),
         SecondOrderConeT(N2 + 1),
@@ -327,7 +305,8 @@ fn mvdr_weights_socp(
  *      h_angle: horizontal steering angle in degrees (relative to input 1)
  *      v_angle: vertical steering angle in degrees
  *      opt_freq: frequency to optimise for
- *      t_win: covariance matrix time window
+ *      t_win: covariance matrix time window, in milliseconds
+ *      t_bf:  interval between beamforming updates, in milliseconds
  */
 #[derive(PortCollection)]
 pub struct Ports {
@@ -339,6 +318,7 @@ pub struct Ports {
     v_angle: InputPort<Control>,
     opt_freq: InputPort<Control>,
     t_win: InputPort<Control>,
+    t_bf: InputPort<Control>,
     mic2_x: InputPort<Control>,
     mic2_y: InputPort<Control>,
     mic3_x: InputPort<Control>,
@@ -354,10 +334,10 @@ pub struct Triforce {
     vangle_curr: f32,
     freq_curr: f32,
     sample_rate: f32,
-    samples_since_last_update_cov: usize,
-    samples_since_last_update_weights: usize,
-    covar_rbuffer: [Matrix3<Complex<f64>>; COVAR_RBUFFER_SZ],
+    samples_since_last_update: usize,
+    covar_rbuffer: Vec<Matrix3<Complex<f64>>>,
     covar_rbuffer_i: usize,
+    covar_rbuffer_sz: usize,
     steering_vector: Vector3<Complex<f32>>,
     covar: Matrix3<Complex<f64>>,
     array_geom: [ElemDistance; 3],
@@ -365,6 +345,11 @@ pub struct Triforce {
     weights: Vector3<Complex<f32>>,
     inputs: [Vec<Complex<f32>>; 3],
     fft_scratch: Vec<Complex<f32>>,
+    buf_len: usize,
+
+    // Parameters
+    t_win: f32, // Time window to accumulate covariance, in milliseconds
+    t_bf: f32,  // Interval between beamforming weights updates, in milliseconds
 }
 
 trait Beamformer: Plugin {
@@ -377,11 +362,11 @@ impl Triforce {
             hangle_curr: 0f32,
             vangle_curr: 0f32,
             freq_curr: 1000f32,
-            samples_since_last_update_cov: usize::max_value(),
-            samples_since_last_update_weights: usize::max_value(),
+            samples_since_last_update: 0,
             sample_rate,
-            covar_rbuffer: [Matrix3::zeros(); COVAR_RBUFFER_SZ],
+            covar_rbuffer: vec![Matrix3::zeros(); 0],
             covar_rbuffer_i: 0,
+            covar_rbuffer_sz: 0,
             array_geom: [ElemDistance { x: 0f32, y: 0f32 }; 3],
             steering_vector: steering_vec(
                 90f32.to_radians(),
@@ -394,6 +379,14 @@ impl Triforce {
             weights: Vector3::zeros(),
             inputs: [Vec::new(), Vec::new(), Vec::new()],
             fft_scratch: Vec::with_capacity(0),
+            buf_len: 0,
+
+            // Sensible defaults: 2.5s covariance
+            // buffer with beamforming every 1s.
+            // Will be used only if not configured
+            // through update_params().
+            t_win: 2500.0,
+            t_bf: 1000.0,
         }
     }
 
@@ -403,11 +396,12 @@ impl Triforce {
         mic2: &[f32],
         mic3: &[f32],
         output: &mut [f32],
-        t_win: f32,
         buf_len: usize,
     ) {
-        if buf_len > self.fft_scratch.len() {
-            self.fft_scratch.resize(buf_len, Complex::zero());
+        // If buffer length changed, update buffer sizes
+        if buf_len != self.buf_len {
+            self.buf_len = buf_len;
+            self.expand_buffers();
         }
 
         // Steering vector is relative to Left/Top mic
@@ -433,31 +427,26 @@ impl Triforce {
             &mut self.fft_scratch,
         );
 
-        // Update the covariance matrix
-        if self.samples_since_last_update_cov as f32 >= (T_COV / 1000f32) * self.sample_rate {
-            self.samples_since_last_update_cov = 0;
+        // Update the covariance ringbuffer every tick
+        self.covar_rbuffer[self.covar_rbuffer_i] = covariance(&self.inputs, buf_len);
+        self.covar_rbuffer_i = (self.covar_rbuffer_i + 1) % self.covar_rbuffer_sz;
 
-            self.covar_rbuffer[self.covar_rbuffer_i] = covariance(&self.inputs, buf_len);
-            self.covar_rbuffer_i = (self.covar_rbuffer_i + 1) % COVAR_RBUFFER_SZ;
+        // Update the weights
+        if self.samples_since_last_update as f32
+            >= (self.t_bf / (1000f32 * 1000f32)) * self.sample_rate
+        {
+            self.samples_since_last_update = 0;
 
+            // Covariance is average of the covariances over the buffer.
             self.covar.set_zero();
-
-            for i in 0..COVAR_RBUFFER_SZ {
+            for i in 0..self.covar_rbuffer_sz {
                 self.covar += self.covar_rbuffer[i];
             }
 
-            self.covar.scale_mut(1f64 / COVAR_RBUFFER_SZ as f64);
-        } else {
-            self.samples_since_last_update_cov += buf_len;
-        }
-
-        // Update the weights
-        if self.samples_since_last_update_weights as f32 >= (T_WEIGHTS / 1000f32) * self.sample_rate
-        {
-            self.samples_since_last_update_weights = 0;
+            self.covar.scale_mut(1f64 / self.covar_rbuffer_sz as f64);
             self.weights = mvdr_weights(&self.covar, &self.steering_vector);
         } else {
-            self.samples_since_last_update_weights += buf_len;
+            self.samples_since_last_update += buf_len;
         }
 
         for t in 0..buf_len {
@@ -478,6 +467,26 @@ impl Triforce {
             };
         }
     }
+
+    // Make sure buffers are big enough
+    // Run whenever any of the following are updated:
+    // buf_len, sample_rate, t_win
+    fn expand_buffers(&mut self) {
+        // Make sure that your buffers are big enough
+        if self.buf_len > self.fft_scratch.len() {
+            self.fft_scratch.resize(self.buf_len, Complex::zero());
+        }
+
+        self.covar_rbuffer_sz =
+            (self.t_win / 1000.0 * self.sample_rate / (self.buf_len as f32)) as usize;
+
+        if self.covar_rbuffer_sz > self.covar_rbuffer.len() {
+            self.covar_rbuffer
+                .resize(self.covar_rbuffer_sz, Matrix3::zeros());
+        }
+
+        self.covar_rbuffer_i = self.covar_rbuffer_i % self.covar_rbuffer_sz;
+    }
 }
 
 impl Plugin for Triforce {
@@ -497,7 +506,6 @@ impl Plugin for Triforce {
             &ports.in_2,
             &ports.in_3,
             &mut ports.out,
-            *ports.t_win,
             samples as usize,
         );
     }
@@ -512,6 +520,8 @@ impl Beamformer for Triforce {
             || self.array_geom[1].y != *ports.mic2_y
             || self.array_geom[2].x != *ports.mic3_x
             || self.array_geom[2].y != *ports.mic3_y
+            || self.t_win != *ports.t_win
+            || self.t_bf != *ports.t_bf
         {
             self.hangle_curr = *ports.h_angle;
             self.vangle_curr = *ports.v_angle;
@@ -534,8 +544,14 @@ impl Beamformer for Triforce {
                 self.array_geom,
             );
 
-            // The steering vector has changed
-            self.weights = mvdr_weights(&self.covar, &self.steering_vector);
+            self.t_win = *ports.t_win;
+            self.t_bf = *ports.t_bf;
+
+            // We need to wait until we see a buffer to
+            // know how much space to allocate.
+            if self.buf_len > 0 {
+                self.expand_buffers();
+            }
         }
     }
 }
