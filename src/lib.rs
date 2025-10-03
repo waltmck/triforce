@@ -32,6 +32,14 @@ const R: f64 = 0.1;
 * numerical issues from a near-zero covariance eigenvalue */
 const C_DL: f64 = 1e-5;
 
+const COVAR_RBUFFER_SZ: usize = 125;
+
+/* Time between covariance matrix computations */
+const T_COV: f32 = 0.02; // This is every tick, for 48kHz 1000-sample signals
+
+/* Time between weight updates */
+const T_WEIGHTS: f32 = 1.0; // was 100.0
+
 /// The distance of a given element in the array from the zeroth
 /// element
 #[derive(Copy, Clone)]
@@ -110,7 +118,7 @@ fn steering_vec(theta: f32, phi: f32, f: f32, elems: [ElemDistance; 3]) -> Vecto
 /// There's nothing special about this, it's just a covariance matrix. It is always
 /// square.
 #[inline]
-fn covariance(signals: &Vec<Vec<Complex<f32>>>, n_samples: usize) -> Matrix3<Complex<f64>> {
+fn covariance(signals: &[Vec<Complex<f32>>], n_samples: usize) -> Matrix3<Complex<f64>> {
     let mut covar = Matrix3::zeros();
 
     for t in 0..n_samples {
@@ -346,8 +354,10 @@ pub struct Triforce {
     vangle_curr: f32,
     freq_curr: f32,
     sample_rate: f32,
-    samples_since_last_update: usize,
-    covar_window: Vec<Vec<Complex<f32>>>,
+    samples_since_last_update_cov: usize,
+    samples_since_last_update_weights: usize,
+    covar_rbuffer: [Matrix3<Complex<f64>>; COVAR_RBUFFER_SZ],
+    covar_rbuffer_i: usize,
     steering_vector: Vector3<Complex<f32>>,
     covar: Matrix3<Complex<f64>>,
     array_geom: [ElemDistance; 3],
@@ -367,13 +377,11 @@ impl Triforce {
             hangle_curr: 0f32,
             vangle_curr: 0f32,
             freq_curr: 1000f32,
-            samples_since_last_update: usize::max_value(),
+            samples_since_last_update_cov: usize::max_value(),
+            samples_since_last_update_weights: usize::max_value(),
             sample_rate,
-            covar_window: vec![
-                vec![Complex::new(0f32, 0f32); 256],
-                vec![Complex::new(0f32, 0f32); 256],
-                vec![Complex::new(0f32, 0f32); 256],
-            ],
+            covar_rbuffer: [Matrix3::zeros(); COVAR_RBUFFER_SZ],
+            covar_rbuffer_i: 0,
             array_geom: [ElemDistance { x: 0f32, y: 0f32 }; 3],
             steering_vector: steering_vec(
                 90f32.to_radians(),
@@ -425,27 +433,31 @@ impl Triforce {
             &mut self.fft_scratch,
         );
 
-        // Update the covariance matrix. We use an overlapping window to smooth over
-        // the transitions.
-        if self.samples_since_last_update as f32 >= (t_win / 1000f32) * self.sample_rate {
-            self.samples_since_last_update = 0;
-            // We want a 1/3 overlap
-            let i = buf_len / 3;
+        // Update the covariance matrix
+        if self.samples_since_last_update_cov as f32 >= (T_COV / 1000f32) * self.sample_rate {
+            self.samples_since_last_update_cov = 0;
 
-            self.covar_window[0].extend_from_slice(&self.inputs[0][0..i]);
-            self.covar_window[1].extend_from_slice(&self.inputs[1][0..i]);
-            self.covar_window[2].extend_from_slice(&self.inputs[2][0..i]);
-            self.covar = covariance(&self.covar_window, self.covar_window[0].len());
-            self.covar_window[0].clear();
-            self.covar_window[0].extend_from_slice(&self.inputs[0][i..buf_len]);
-            self.covar_window[1].clear();
-            self.covar_window[1].extend_from_slice(&self.inputs[1][i..buf_len]);
-            self.covar_window[2].clear();
-            self.covar_window[2].extend_from_slice(&self.inputs[2][i..buf_len]);
+            self.covar_rbuffer[self.covar_rbuffer_i] = covariance(&self.inputs, buf_len);
+            self.covar_rbuffer_i = (self.covar_rbuffer_i + 1) % COVAR_RBUFFER_SZ;
 
+            self.covar.set_zero();
+
+            for i in 0..COVAR_RBUFFER_SZ {
+                self.covar += self.covar_rbuffer[i];
+            }
+
+            self.covar.scale_mut(1f64 / COVAR_RBUFFER_SZ as f64);
+        } else {
+            self.samples_since_last_update_cov += buf_len;
+        }
+
+        // Update the weights
+        if self.samples_since_last_update_weights as f32 >= (T_WEIGHTS / 1000f32) * self.sample_rate
+        {
+            self.samples_since_last_update_weights = 0;
             self.weights = mvdr_weights(&self.covar, &self.steering_vector);
         } else {
-            self.samples_since_last_update += buf_len;
+            self.samples_since_last_update_weights += buf_len;
         }
 
         for t in 0..buf_len {
